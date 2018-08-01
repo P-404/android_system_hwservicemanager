@@ -23,8 +23,9 @@ vintf::Transport getTransportFromManifest(
 }
 
 vintf::Transport getTransport(const std::string &interfaceName, const std::string &instanceName) {
-    FQName fqName(interfaceName);
-    if (!fqName.isValid()) {
+    FQName fqName;
+
+    if (!FQName::parse(interfaceName, &fqName)) {
         LOG(ERROR) << __FUNCTION__ << ": " << interfaceName
                    << " is not a valid fully-qualified name ";
         return vintf::Transport::EMPTY;

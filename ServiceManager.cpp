@@ -13,6 +13,7 @@
 #include <thread>
 
 using android::hardware::IPCThreadState;
+using ::android::hardware::interfacesEqual;
 
 namespace android {
 namespace hidl {
@@ -22,30 +23,55 @@ namespace implementation {
 static constexpr uint64_t kServiceDiedCookie = 0;
 static constexpr uint64_t kPackageListenerDiedCookie = 1;
 static constexpr uint64_t kServiceListenerDiedCookie = 2;
+static constexpr uint64_t kClientCallbackDiedCookie = 3;
 
 size_t ServiceManager::countExistingService() const {
     size_t total = 0;
     forEachExistingService([&] (const HidlService *) {
         ++total;
+        return true;  // continue
     });
     return total;
 }
 
-void ServiceManager::forEachExistingService(std::function<void(const HidlService *)> f) const {
-    forEachServiceEntry([f] (const HidlService *service) {
+void ServiceManager::forEachExistingService(std::function<bool(const HidlService *)> f) const {
+    forEachServiceEntry([&] (const HidlService *service) {
         if (service->getService() == nullptr) {
-            return;
+            return true;  // continue
         }
-        f(service);
+        return f(service);
     });
 }
 
-void ServiceManager::forEachServiceEntry(std::function<void(const HidlService *)> f) const {
-    for (const auto &interfaceMapping : mServiceMap) {
-        const auto &instanceMap = interfaceMapping.second.getInstanceMap();
+void ServiceManager::forEachExistingService(std::function<bool(HidlService *)> f) {
+    forEachServiceEntry([&] (HidlService *service) {
+        if (service->getService() == nullptr) {
+            return true;  // continue
+        }
+        return f(service);
+    });
+}
 
-        for (const auto &instanceMapping : instanceMap) {
-            f(instanceMapping.second.get());
+void ServiceManager::forEachServiceEntry(std::function<bool(const HidlService *)> f) const {
+    for (const auto& interfaceMapping : mServiceMap) {
+        const auto& instanceMap = interfaceMapping.second.getInstanceMap();
+
+        for (const auto& instanceMapping : instanceMap) {
+            if (!f(instanceMapping.second.get())) {
+                return;
+            }
+        }
+    }
+}
+
+void ServiceManager::forEachServiceEntry(std::function<bool(HidlService *)> f) {
+    for (auto& interfaceMapping : mServiceMap) {
+        auto& instanceMap = interfaceMapping.second.getInstanceMap();
+
+        for (auto& instanceMapping : instanceMap) {
+            if (!f(instanceMapping.second.get())) {
+                return;
+            }
         }
     }
 }
@@ -62,11 +88,17 @@ void ServiceManager::serviceDied(uint64_t cookie, const wp<IBase>& who) {
         case kServiceListenerDiedCookie:
             serviceRemoved = removeServiceListener(who);
             break;
+        case kClientCallbackDiedCookie: {
+            sp<IBase> base = who.promote();
+            IClientCallback* callback = static_cast<IClientCallback*>(base.get());
+            serviceRemoved = unregisterClientCallback(nullptr /*service*/,
+                                                      sp<IClientCallback>(callback));
+        } break;
     }
 
     if (!serviceRemoved) {
-        LOG(ERROR) << "Received death notification but serivce not removed. Cookie: " << cookie
-                   << " Service pointer: " << who.promote().get();
+        LOG(ERROR) << "Received death notification but interface instance not removed. Cookie: "
+                   << cookie << " Service pointer: " << who.promote().get();
     }
 }
 
@@ -140,8 +172,6 @@ void ServiceManager::PackageInterfaceMap::addPackageListener(sp<IServiceNotifica
 }
 
 bool ServiceManager::PackageInterfaceMap::removePackageListener(const wp<IBase>& who) {
-    using ::android::hardware::interfacesEqual;
-
     bool found = false;
 
     for (auto it = mPackageListeners.begin(); it != mPackageListeners.end();) {
@@ -157,8 +187,6 @@ bool ServiceManager::PackageInterfaceMap::removePackageListener(const wp<IBase>&
 }
 
 bool ServiceManager::PackageInterfaceMap::removeServiceListener(const wp<IBase>& who) {
-    using ::android::hardware::interfacesEqual;
-
     bool found = false;
 
     for (auto &servicePair : getInstanceMap()) {
@@ -327,6 +355,7 @@ Return<void> ServiceManager::list(list_cb _hidl_cb) {
     size_t idx = 0;
     forEachExistingService([&] (const HidlService *service) {
         list[idx++] = service->string();
+        return true;  // continue
     });
 
     _hidl_cb(list);
@@ -387,8 +416,8 @@ Return<bool> ServiceManager::registerForNotifications(const hidl_string& fqName,
     PackageInterfaceMap &ifaceMap = mServiceMap[fqName];
 
     if (name.empty()) {
-        auto ret = callback->linkToDeath(this, kPackageListenerDiedCookie);
-        if (!ret.isOk()) {
+        bool ret = callback->linkToDeath(this, kPackageListenerDiedCookie).withDefault(false);
+        if (!ret) {
             LOG(ERROR) << "Failed to register death recipient for " << fqName << "/" << name;
             return false;
         }
@@ -398,8 +427,8 @@ Return<bool> ServiceManager::registerForNotifications(const hidl_string& fqName,
 
     HidlService *service = ifaceMap.lookup(name);
 
-    auto ret = callback->linkToDeath(this, kServiceListenerDiedCookie);
-    if (!ret.isOk()) {
+    bool ret = callback->linkToDeath(this, kServiceListenerDiedCookie).withDefault(false);
+    if (!ret) {
         LOG(ERROR) << "Failed to register death recipient for " << fqName << "/" << name;
         return false;
     }
@@ -451,6 +480,67 @@ Return<bool> ServiceManager::unregisterForNotifications(const hidl_string& fqNam
     return service->removeListener(callback);
 }
 
+Return<bool> ServiceManager::registerClientCallback(const sp<IBase>& server,
+                                                    const sp<IClientCallback>& cb) {
+    if (server == nullptr || cb == nullptr) return false;
+
+    // only the server of the interface can register a client callback
+    pid_t pid = IPCThreadState::self()->getCallingPid();
+
+    HidlService* registered = nullptr;
+
+    forEachExistingService([&] (HidlService *service) {
+        if (service->getPid() != pid) {
+            return true;  // continue
+        }
+
+        if (interfacesEqual(service->getService(), server)) {
+            service->addClientCallback(cb);
+            registered = service;
+            return false;  // break
+        }
+        return true;  // continue
+    });
+
+    if (registered != nullptr) {
+        bool linkRet = cb->linkToDeath(this, kClientCallbackDiedCookie).withDefault(false);
+        if (!linkRet) {
+            LOG(ERROR) << "Could not link to death for registerClientCallback";
+            unregisterClientCallback(server, cb);
+            registered = nullptr;
+        }
+    }
+
+    if (registered != nullptr) {
+        registered->handleClientCallbacks();
+    }
+
+    return registered != nullptr;
+}
+
+Return<bool> ServiceManager::unregisterClientCallback(const sp<IBase>& server,
+                                                      const sp<IClientCallback>& cb) {
+    if (cb == nullptr) return false;
+
+    bool removed = false;
+
+    forEachExistingService([&] (HidlService *service) {
+        if (server == nullptr || interfacesEqual(service->getService(), server)) {
+            removed |= service->removeClientCallback(cb);
+        }
+        return true;  // continue
+    });
+
+    return removed;
+}
+
+void ServiceManager::handleClientCallbacks() {
+    forEachServiceEntry([&] (HidlService *service) {
+        service->handleClientCallbacks();
+        return true;  // continue
+    });
+}
+
 Return<void> ServiceManager::debugDump(debugDump_cb _cb) {
     pid_t pid = IPCThreadState::self()->getCallingPid();
     if (!mAcl.canList(pid)) {
@@ -475,6 +565,8 @@ Return<void> ServiceManager::debugDump(debugDump_cb _cb) {
             .clientPids = clientPids,
             .arch = ::android::hidl::base::V1_0::DebugInfo::Architecture::UNKNOWN
         });
+
+        return true;  // continue
     });
 
     _cb(list);
@@ -514,8 +606,6 @@ Return<void> ServiceManager::registerPassthroughClient(const hidl_string &fqName
 }
 
 bool ServiceManager::removeService(const wp<IBase>& who, const std::string* restrictToInstanceName) {
-    using ::android::hardware::interfacesEqual;
-
     bool keepInstance = false;
     bool removed = false;
     for (auto &interfaceMapping : mServiceMap) {

@@ -3,7 +3,7 @@
 
 #include <set>
 
-#include <android/hidl/manager/1.1/IServiceManager.h>
+#include <android/hidl/manager/1.2/IServiceManager.h>
 #include <hidl/Status.h>
 #include <hidl/MQDescriptor.h>
 
@@ -19,6 +19,7 @@ using ::android::hardware::Void;
 using ::android::hidl::base::V1_0::IBase;
 using ::android::hidl::manager::V1_0::IServiceNotification;
 using ::android::hidl::manager::V1_1::IServiceManager;
+using ::android::hidl::manager::V1_2::IClientCallback;
 using ::android::sp;
 
 struct HidlService {
@@ -49,6 +50,10 @@ struct HidlService {
     bool removeListener(const wp<IBase> &listener);
     void registerPassthroughClient(pid_t pid);
 
+    void addClientCallback(const sp<IClientCallback>& callback);
+    bool removeClientCallback(const sp<IClientCallback>& callback);
+    void handleClientCallbacks();
+
     std::string string() const; // e.x. "android.hidl.manager@1.0::IServiceManager/manager"
     const std::set<pid_t> &getPassthroughClients() const;
 
@@ -62,6 +67,9 @@ private:
     std::vector<sp<IServiceNotification>> mListeners{};
     std::set<pid_t>                       mPassthroughClients{};
     pid_t                                 mPid = static_cast<pid_t>(IServiceManager::PidConstant::NO_PID);
+
+    std::vector<sp<IClientCallback>>      mClientCallbacks{};
+    bool                                  mHasClients = false; // notifications sent on true -> false.
 };
 
 }  // namespace implementation

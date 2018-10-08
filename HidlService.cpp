@@ -3,7 +3,10 @@
 
 #include <android-base/logging.h>
 #include <hidl/HidlTransportSupport.h>
+#include <hwbinder/BpHwBinder.h>
 #include <sstream>
+
+using ::android::hardware::interfacesEqual;
 
 namespace android {
 namespace hidl {
@@ -27,6 +30,8 @@ sp<IBase> HidlService::getService() const {
 void HidlService::setService(sp<IBase> service, pid_t pid) {
     mService = service;
     mPid = pid;
+
+    mClientCallbacks.clear();
 
     sendRegistrationNotifications();
 }
@@ -56,8 +61,6 @@ void HidlService::addListener(const sp<IServiceNotification> &listener) {
 }
 
 bool HidlService::removeListener(const wp<IBase>& listener) {
-    using ::android::hardware::interfacesEqual;
-
     bool found = false;
 
     for (auto it = mListeners.begin(); it != mListeners.end();) {
@@ -78,6 +81,61 @@ void HidlService::registerPassthroughClient(pid_t pid) {
 
 const std::set<pid_t> &HidlService::getPassthroughClients() const {
     return mPassthroughClients;
+}
+
+void HidlService::addClientCallback(const sp<IClientCallback>& callback) {
+    mClientCallbacks.push_back(callback);
+}
+
+bool HidlService::removeClientCallback(const sp<IClientCallback>& callback) {
+    bool found = false;
+
+    for (auto it = mClientCallbacks.begin(); it != mClientCallbacks.end();) {
+        if (interfacesEqual(*it, callback)) {
+            it = mClientCallbacks.erase(it);
+            found = true;
+        } else {
+            ++it;
+        }
+    }
+
+    return found;
+}
+
+void HidlService::handleClientCallbacks() {
+    using ::android::hardware::toBinder;
+    using ::android::hardware::BpHwBinder;
+    using ::android::hardware::IBinder;
+
+    if (mClientCallbacks.empty()) return;
+    if (mService == nullptr) return;
+
+    // this justifies the bp cast below, no in-process HALs need this
+    if (!mService->isRemote()) return;
+
+    sp<IBinder> binder = toBinder(mService);
+    if (binder == nullptr) return;
+
+    sp<BpHwBinder> bpBinder = static_cast<BpHwBinder*>(binder.get());
+    ssize_t count = bpBinder->getNodeStrongRefCount();
+
+    // binder driver doesn't support this feature
+    if (count == -1) return;
+
+    bool hasClients = count > 1; // this process holds a strong count
+
+    // going from having clients to not having clients
+    if (!hasClients && mHasClients) {
+        LOG(INFO) << "Notifying " << string() << " they have no clients.";
+
+        for (const auto& cb : mClientCallbacks) {
+            if (!cb->onNoClients(getService()).isOk()) {
+                LOG(WARNING) << "No-clients callback failed for " << string();
+            }
+        }
+    }
+
+    mHasClients = hasClients;
 }
 
 std::string HidlService::string() const {

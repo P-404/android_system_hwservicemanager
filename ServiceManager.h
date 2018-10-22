@@ -57,11 +57,20 @@ struct ServiceManager : public V1_2::IServiceManager, hidl_death_recipient {
                                         const sp<IClientCallback>& cb) override;
     Return<bool> unregisterClientCallback(const sp<IBase>& server,
                                           const sp<IClientCallback>& cb) override;
+    Return<bool> addWithChain(const hidl_string& name,
+                              const sp<IBase>& service,
+                              const hidl_vec<hidl_string>& chain) override;
 
     void handleClientCallbacks();
 
     virtual void serviceDied(uint64_t cookie, const wp<IBase>& who);
 private:
+    bool addImpl(const hidl_string& name,
+                 const sp<IBase>& service,
+                 const hidl_vec<hidl_string>& interfaceChain,
+                 const AccessControl::Context &context,
+                 pid_t pid);
+
     // if restrictToInstanceName is nullptr, remove all, otherwise only those services
     // which match this instance name. Returns whether all instances were removed.
     bool removeService(const wp<IBase>& who, const std::string* restrictToInstanceName);

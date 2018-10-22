@@ -244,81 +244,88 @@ Return<sp<IBase>> ServiceManager::get(const hidl_string& hidlFqName,
 }
 
 Return<bool> ServiceManager::add(const hidl_string& name, const sp<IBase>& service) {
-    bool isValidService = false;
+    bool addSuccess = false;
 
     if (service == nullptr) {
         return false;
     }
 
-    // TODO(b/34235311): use HIDL way to determine this
-    // also, this assumes that the PID that is registering is the pid that is the service
     pid_t pid = IPCThreadState::self()->getCallingPid();
     auto context = mAcl.getContext(pid);
 
     auto ret = service->interfaceChain([&](const auto &interfaceChain) {
-        if (interfaceChain.size() == 0) {
-            return;
-        }
-
-        // First, verify you're allowed to add() the whole interface hierarchy
-        for(size_t i = 0; i < interfaceChain.size(); i++) {
-            const std::string fqName = interfaceChain[i];
-
-            if (!mAcl.canAdd(fqName, context, pid)) {
-                return;
-            }
-        }
-
-        {
-            // For IBar extends IFoo if IFoo/default is being registered, remove
-            // IBar/default. This makes sure the following two things are equivalent
-            // 1). IBar::castFrom(IFoo::getService(X))
-            // 2). IBar::getService(X)
-            // assuming that IBar is declared in the device manifest and there
-            // is also not an IBaz extends IFoo.
-            const std::string childFqName = interfaceChain[0];
-            const PackageInterfaceMap &ifaceMap = mServiceMap[childFqName];
-            const HidlService *hidlService = ifaceMap.lookup(name);
-            if (hidlService != nullptr) {
-                const sp<IBase> remove = hidlService->getService();
-
-                if (remove != nullptr) {
-                    const std::string instanceName = name;
-                    removeService(remove, &instanceName /* restrictToInstanceName */);
-                }
-            }
-        }
-
-        for(size_t i = 0; i < interfaceChain.size(); i++) {
-            const std::string fqName = interfaceChain[i];
-
-            PackageInterfaceMap &ifaceMap = mServiceMap[fqName];
-            HidlService *hidlService = ifaceMap.lookup(name);
-
-            if (hidlService == nullptr) {
-                ifaceMap.insertService(
-                    std::make_unique<HidlService>(fqName, name, service, pid));
-            } else {
-                hidlService->setService(service, pid);
-            }
-
-            ifaceMap.sendPackageRegistrationNotification(fqName, name);
-        }
-
-        bool linkRet = service->linkToDeath(this, kServiceDiedCookie).withDefault(false);
-        if (!linkRet) {
-            LOG(ERROR) << "Could not link to death for " << interfaceChain[0] << "/" << name;
-        }
-
-        isValidService = true;
+        addSuccess = addImpl(name, service, interfaceChain, context, pid);
     });
 
     if (!ret.isOk()) {
-        LOG(ERROR) << "Failed to retrieve interface chain.";
+        LOG(ERROR) << "Failed to retrieve interface chain: " << ret.description();
         return false;
     }
 
-    return isValidService;
+    return addSuccess;
+}
+
+bool ServiceManager::addImpl(const hidl_string& name,
+                             const sp<IBase>& service,
+                             const hidl_vec<hidl_string>& interfaceChain,
+                             const AccessControl::Context &context,
+                             pid_t pid) {
+    if (interfaceChain.size() == 0) {
+        LOG(WARNING) << "Empty interface chain for " << name;
+        return false;
+    }
+
+    // First, verify you're allowed to add() the whole interface hierarchy
+    for(size_t i = 0; i < interfaceChain.size(); i++) {
+        const std::string fqName = interfaceChain[i];
+
+        if (!mAcl.canAdd(fqName, context, pid)) {
+            return false;
+        }
+    }
+
+    {
+        // For IBar extends IFoo if IFoo/default is being registered, remove
+        // IBar/default. This makes sure the following two things are equivalent
+        // 1). IBar::castFrom(IFoo::getService(X))
+        // 2). IBar::getService(X)
+        // assuming that IBar is declared in the device manifest and there
+        // is also not an IBaz extends IFoo.
+        const std::string childFqName = interfaceChain[0];
+        const PackageInterfaceMap &ifaceMap = mServiceMap[childFqName];
+        const HidlService *hidlService = ifaceMap.lookup(name);
+        if (hidlService != nullptr) {
+            const sp<IBase> remove = hidlService->getService();
+
+            if (remove != nullptr) {
+                const std::string instanceName = name;
+                removeService(remove, &instanceName /* restrictToInstanceName */);
+            }
+        }
+    }
+
+    for(size_t i = 0; i < interfaceChain.size(); i++) {
+        const std::string fqName = interfaceChain[i];
+
+        PackageInterfaceMap &ifaceMap = mServiceMap[fqName];
+        HidlService *hidlService = ifaceMap.lookup(name);
+
+        if (hidlService == nullptr) {
+            ifaceMap.insertService(
+                std::make_unique<HidlService>(fqName, name, service, pid));
+        } else {
+            hidlService->setService(service, pid);
+        }
+
+        ifaceMap.sendPackageRegistrationNotification(fqName, name);
+    }
+
+    bool linkRet = service->linkToDeath(this, kServiceDiedCookie).withDefault(false);
+    if (!linkRet) {
+        LOG(ERROR) << "Could not link to death for " << interfaceChain[0] << "/" << name;
+    }
+
+    return true;
 }
 
 Return<ServiceManager::Transport> ServiceManager::getTransport(const hidl_string& fqName,
@@ -539,6 +546,19 @@ void ServiceManager::handleClientCallbacks() {
         service->handleClientCallbacks();
         return true;  // continue
     });
+}
+
+Return<bool> ServiceManager::addWithChain(const hidl_string& name,
+                                          const sp<IBase>& service,
+                                          const hidl_vec<hidl_string>& chain) {
+    if (service == nullptr) {
+        return false;
+    }
+
+    pid_t pid = IPCThreadState::self()->getCallingPid();
+    auto context = mAcl.getContext(pid);
+
+    return addImpl(name, service, chain, context, pid);
 }
 
 Return<void> ServiceManager::debugDump(debugDump_cb _cb) {

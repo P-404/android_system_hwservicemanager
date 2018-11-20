@@ -226,8 +226,10 @@ Return<sp<IBase>> ServiceManager::get(const hidl_string& hidlFqName,
         return nullptr;
     }
 
-    const PackageInterfaceMap &ifaceMap = ifaceIt->second;
-    const HidlService *hidlService = ifaceMap.lookup(name);
+    PackageInterfaceMap &ifaceMap = ifaceIt->second;
+
+    // may be modified in post-command task
+    HidlService *hidlService = ifaceMap.lookup(name);
 
     if (hidlService == nullptr) {
         tryStartService(fqName, hidlName);
@@ -239,6 +241,15 @@ Return<sp<IBase>> ServiceManager::get(const hidl_string& hidlFqName,
         tryStartService(fqName, hidlName);
         return nullptr;
     }
+
+    // This is executed immediately after the binder driver confirms the transaction. The driver
+    // will update the appropriate data structures to reflect the fact that the client now has the
+    // service this function is returning. Nothing else can update the HidlService at the same
+    // time. This will run before anything else can modify the HidlService which is owned by this
+    // object, so it will be in the same state that it was when this function returns.
+    hardware::addPostCommandTask([hidlService] {
+        hidlService->handleClientCallbacks();
+    });
 
     return service;
 }
@@ -559,6 +570,21 @@ Return<bool> ServiceManager::addWithChain(const hidl_string& name,
     auto context = mAcl.getContext(pid);
 
     return addImpl(name, service, chain, context, pid);
+}
+
+Return<void> ServiceManager::listManifestByInterface(const hidl_string& fqName,
+                                                     listManifestByInterface_cb _hidl_cb) {
+    pid_t pid = IPCThreadState::self()->getCallingPid();
+    if (!mAcl.canGet(fqName, pid)) {
+        _hidl_cb({});
+        return Void();
+    }
+
+    std::set<std::string> instances = getInstances(fqName);
+    hidl_vec<hidl_string> ret(instances.begin(), instances.end());
+
+    _hidl_cb(ret);
+    return Void();
 }
 
 Return<void> ServiceManager::debugDump(debugDump_cb _cb) {

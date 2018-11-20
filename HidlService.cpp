@@ -124,13 +124,13 @@ void HidlService::handleClientCallbacks() {
 
     bool hasClients = count > 1; // this process holds a strong count
 
-    // going from having clients to not having clients
-    if (!hasClients && mHasClients) {
-        LOG(INFO) << "Notifying " << string() << " they have no clients.";
+    if (hasClients != mHasClients) {
+        LOG(INFO) << "Notifying " << string() << " they have clients: " << hasClients;
 
         for (const auto& cb : mClientCallbacks) {
-            if (!cb->onNoClients(getService()).isOk()) {
-                LOG(WARNING) << "No-clients callback failed for " << string();
+            Return<void> ret = cb->onClients(getService(), hasClients);
+            if (!ret.isOk()) {
+                LOG(WARNING) << "onClients callback failed for " << string() << ": " << ret.description();
             }
         }
     }

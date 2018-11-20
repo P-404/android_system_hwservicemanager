@@ -60,6 +60,8 @@ struct ServiceManager : public V1_2::IServiceManager, hidl_death_recipient {
     Return<bool> addWithChain(const hidl_string& name,
                               const sp<IBase>& service,
                               const hidl_vec<hidl_string>& chain) override;
+    Return<void> listManifestByInterface(const hidl_string& fqInstanceName,
+                                         listManifestByInterface_cb _hidl_cb) override;
 
     void handleClientCallbacks();
 

@@ -242,6 +242,10 @@ Return<sp<IBase>> ServiceManager::get(const hidl_string& hidlFqName,
         return nullptr;
     }
 
+    // Let HidlService know that we handed out a client. If the client drops the service before the
+    // next time handleClientCallbacks is called, it will still know that the service had been handed out.
+    hidlService->guaranteeClient();
+
     // This is executed immediately after the binder driver confirms the transaction. The driver
     // will update the appropriate data structures to reflect the fact that the client now has the
     // service this function is returning. Nothing else can update the HidlService at the same

@@ -54,11 +54,15 @@ struct HidlService {
     bool removeClientCallback(const sp<IClientCallback>& callback);
     void handleClientCallbacks();
 
+    // when giving out a handle to a client, but the kernel might not know this yet
+    void guaranteeClient();
+
     std::string string() const; // e.x. "android.hidl.manager@1.0::IServiceManager/manager"
     const std::set<pid_t> &getPassthroughClients() const;
 
 private:
     void sendRegistrationNotifications();
+    void sendClientCallbackNotifications(bool hasClients);
 
     const std::string                     mInterfaceName; // e.x. "android.hidl.manager@1.0::IServiceManager"
     const std::string                     mInstanceName;  // e.x. "manager"
@@ -70,6 +74,7 @@ private:
 
     std::vector<sp<IClientCallback>>      mClientCallbacks{};
     bool                                  mHasClients = false; // notifications sent on true -> false.
+    bool                                  mGuaranteeClient = false; // whenever a client is handed out
 };
 
 }  // namespace implementation

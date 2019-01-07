@@ -124,18 +124,22 @@ void HidlService::handleClientCallbacks() {
 
     bool hasClients = count > 1; // this process holds a strong count
 
-    if (hasClients != mHasClients) {
-        LOG(INFO) << "Notifying " << string() << " they have clients: " << hasClients;
+    // a handle was handed out, but it was immediately dropped
+    if (mGuaranteeClient && !hasClients) {
+        sendClientCallbackNotifications(true); // for when we handed it out
+        mHasClients = true;
+    }
 
-        for (const auto& cb : mClientCallbacks) {
-            Return<void> ret = cb->onClients(getService(), hasClients);
-            if (!ret.isOk()) {
-                LOG(WARNING) << "onClients callback failed for " << string() << ": " << ret.description();
-            }
-        }
+    if (hasClients != mHasClients) {
+        sendClientCallbackNotifications(hasClients);
     }
 
     mHasClients = hasClients;
+    mGuaranteeClient = false;
+}
+
+void HidlService::guaranteeClient() {
+    mGuaranteeClient = true;
 }
 
 std::string HidlService::string() const {
@@ -163,6 +167,18 @@ void HidlService::sendRegistrationNotifications() {
         }
     }
 }
+
+void HidlService::sendClientCallbackNotifications(bool hasClients) {
+    LOG(INFO) << "Notifying " << string() << " they have clients: " << hasClients;
+
+    for (const auto& cb : mClientCallbacks) {
+        Return<void> ret = cb->onClients(getService(), hasClients);
+        if (!ret.isOk()) {
+            LOG(WARNING) << "onClients callback failed for " << string() << ": " << ret.description();
+        }
+    }
+}
+
 
 }  // namespace implementation
 }  // namespace manager

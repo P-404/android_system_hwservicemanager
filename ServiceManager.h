@@ -70,8 +70,7 @@ private:
     bool addImpl(const hidl_string& name,
                  const sp<IBase>& service,
                  const hidl_vec<hidl_string>& interfaceChain,
-                 const AccessControl::Context &context,
-                 pid_t pid);
+                 const AccessControl::CallingContext& callingContext);
 
     // if restrictToInstanceName is nullptr, remove all, otherwise only those services
     // which match this instance name. Returns whether all instances were removed.

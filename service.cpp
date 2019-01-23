@@ -33,6 +33,7 @@ using android::hardware::ProcessState;
 
 // libhidl
 using android::hardware::handleTransportPoll;
+using android::hardware::setRequestingSid;
 using android::hardware::setupTransportPolling;
 using android::hardware::toBinder;
 
@@ -121,6 +122,8 @@ private:
 
 int main() {
     sp<ServiceManager> manager = new ServiceManager();
+    setRequestingSid(manager, true);
+
     if (!manager->add(serviceName, manager)) {
         ALOGE("Failed to register hwservicemanager with itself.");
     }

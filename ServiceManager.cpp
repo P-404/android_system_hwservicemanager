@@ -93,6 +93,19 @@ void ServiceManager::forEachServiceEntry(std::function<bool(HidlService *)> f) {
     }
 }
 
+HidlService* ServiceManager::lookup(const std::string& fqName, const std::string& name) {
+    auto ifaceIt = mServiceMap.find(fqName);
+    if (ifaceIt == mServiceMap.end()) {
+        return nullptr;
+    }
+
+    PackageInterfaceMap &ifaceMap = ifaceIt->second;
+
+    HidlService *hidlService = ifaceMap.lookup(name);
+
+    return hidlService;
+}
+
 void ServiceManager::serviceDied(uint64_t cookie, const wp<IBase>& who) {
     bool serviceRemoved = false;
     switch (cookie) {
@@ -236,25 +249,15 @@ Return<sp<IBase>> ServiceManager::get(const hidl_string& hidlFqName,
         return nullptr;
     }
 
-    auto ifaceIt = mServiceMap.find(fqName);
-    if (ifaceIt == mServiceMap.end()) {
-        tryStartService(fqName, hidlName);
-        return nullptr;
-    }
-
-    PackageInterfaceMap &ifaceMap = ifaceIt->second;
-
-    // may be modified in post-command task
-    HidlService *hidlService = ifaceMap.lookup(name);
-
+    HidlService* hidlService = lookup(fqName, name);
     if (hidlService == nullptr) {
-        tryStartService(fqName, hidlName);
+        tryStartService(fqName, name);
         return nullptr;
     }
 
     sp<IBase> service = hidlService->getService();
     if (service == nullptr) {
-        tryStartService(fqName, hidlName);
+        tryStartService(fqName, name);
         return nullptr;
     }
 
@@ -268,7 +271,7 @@ Return<sp<IBase>> ServiceManager::get(const hidl_string& hidlFqName,
     // time. This will run before anything else can modify the HidlService which is owned by this
     // object, so it will be in the same state that it was when this function returns.
     hardware::addPostCommandTask([hidlService] {
-        hidlService->handleClientCallbacks();
+        hidlService->handleClientCallbacks(false /* isCalledOnInterval */);
     });
 
     return service;
@@ -512,42 +515,52 @@ Return<bool> ServiceManager::unregisterForNotifications(const hidl_string& fqNam
     return service->removeListener(callback);
 }
 
-Return<bool> ServiceManager::registerClientCallback(const sp<IBase>& server,
+Return<bool> ServiceManager::registerClientCallback(const hidl_string& hidlFqName,
+                                                    const hidl_string& hidlName,
+                                                    const sp<IBase>& server,
                                                     const sp<IClientCallback>& cb) {
     if (server == nullptr || cb == nullptr) return false;
 
+    const std::string fqName = hidlFqName;
+    const std::string name = hidlName;
+
     // only the server of the interface can register a client callback
     pid_t pid = IPCThreadState::self()->getCallingPid();
-
-    HidlService* registered = nullptr;
-    forEachExistingService([&] (HidlService *service) {
-        // This is a sanity check. Only a server should ever care if it has no clients.
-        if (service->getDebugPid() != pid) {
-            return true;  // continue
-        }
-
-        if (interfacesEqual(service->getService(), server)) {
-            service->addClientCallback(cb);
-            registered = service;
-            return false;  // break
-        }
-        return true;  // continue
-    });
-
-    if (registered != nullptr) {
-        bool linkRet = cb->linkToDeath(this, kClientCallbackDiedCookie).withDefault(false);
-        if (!linkRet) {
-            LOG(ERROR) << "Could not link to death for registerClientCallback";
-            unregisterClientCallback(server, cb);
-            registered = nullptr;
-        }
+    if (!mAcl.canAdd(fqName, getBinderCallingContext())) {
+        return false;
     }
 
-    if (registered != nullptr) {
-        registered->handleClientCallbacks();
+    HidlService* registered = lookup(fqName, name);
+
+    if (registered == nullptr) {
+        return false;
     }
 
-    return registered != nullptr;
+    // sanity
+    if (registered->getDebugPid() != pid) {
+        LOG(WARNING) << "Only a server can register for client callbacks (for " << fqName
+            << "/" << name << ")";
+        return false;
+    }
+
+    sp<IBase> service = registered->getService();
+
+    if (!interfacesEqual(service, server)) {
+        LOG(WARNING) << "Tried to register client callback for " << fqName << "/" << name
+            << " but a different service is registered under this name.";
+        return false;
+    }
+
+    bool linkRet = cb->linkToDeath(this, kClientCallbackDiedCookie).withDefault(false);
+    if (!linkRet) {
+        LOG(ERROR) << "Could not link to death for registerClientCallback";
+        return false;
+    }
+
+    registered->addClientCallback(cb);
+    registered->handleClientCallbacks(false /* isCalledOnInterval */);
+
+    return true;
 }
 
 Return<bool> ServiceManager::unregisterClientCallback(const sp<IBase>& server,
@@ -568,7 +581,7 @@ Return<bool> ServiceManager::unregisterClientCallback(const sp<IBase>& server,
 
 void ServiceManager::handleClientCallbacks() {
     forEachServiceEntry([&] (HidlService *service) {
-        service->handleClientCallbacks();
+        service->handleClientCallbacks(true /* isCalledOnInterval */);
         return true;  // continue
     });
 }
@@ -597,6 +610,63 @@ Return<void> ServiceManager::listManifestByInterface(const hidl_string& fqName,
 
     _hidl_cb(ret);
     return Void();
+}
+
+Return<bool> ServiceManager::tryUnregister(const hidl_string& hidlFqName,
+                                           const hidl_string& hidlName,
+                                           const sp<IBase>& service) {
+    const std::string fqName = hidlFqName;
+    const std::string name = hidlName;
+
+    if (service == nullptr) {
+        return false;
+    }
+
+    if (!mAcl.canAdd(fqName, getBinderCallingContext())) {
+        return false;
+    }
+
+    HidlService* registered = lookup(fqName, name);
+
+    // sanity
+    pid_t pid = IPCThreadState::self()->getCallingPid();
+    if (registered->getDebugPid() != pid) {
+        LOG(WARNING) << "Only a server can unregister itself (for " << fqName
+            << "/" << name << ")";
+        return false;
+    }
+
+    sp<IBase> server = registered->getService();
+
+    if (!interfacesEqual(service, server)) {
+        LOG(WARNING) << "Tried to unregister for " << fqName << "/" << name
+            << " but a different service is registered under this name.";
+        return false;
+    }
+
+    int clients = registered->handleClientCallbacks(false /* isCalledOnInterval */);
+
+    // clients < 0: feature not implemented or other error. Assume clients.
+    // Otherwise:
+    // - kernel driver will hold onto one refcount (during this transaction)
+    // - hwservicemanager has a refcount (guaranteed by this transaction)
+    // So, if clients > 2, then at least one other service on the system must hold a refcount.
+    if (clients < 0 || clients > 2) {
+        // client callbacks are either disabled or there are other clients
+        LOG(INFO) << "Tried to unregister for " << fqName << "/" << name
+            << " but there are clients: " << clients;
+        return false;
+    }
+
+    // will remove entire parent hierarchy
+    bool success = removeService(service, &name /*restrictToInstanceName*/);
+
+    if (registered->getService() != nullptr) {
+        LOG(ERROR) << "Bad state. Unregistration failed for " << fqName << "/" << name << ".";
+        return false;
+    }
+
+    return success;
 }
 
 Return<void> ServiceManager::debugDump(debugDump_cb _cb) {

@@ -53,7 +53,9 @@ struct ServiceManager : public V1_2::IServiceManager, hidl_death_recipient {
                                             const sp<IServiceNotification>& callback) override;
 
     // Methods from ::android::hidl::manager::V1_2::IServiceManager follow.
-    Return<bool> registerClientCallback(const sp<IBase>& server,
+    Return<bool> registerClientCallback(const hidl_string& fqName,
+                                        const hidl_string& name,
+                                        const sp<IBase>& server,
                                         const sp<IClientCallback>& cb) override;
     Return<bool> unregisterClientCallback(const sp<IBase>& server,
                                           const sp<IClientCallback>& cb) override;
@@ -62,6 +64,9 @@ struct ServiceManager : public V1_2::IServiceManager, hidl_death_recipient {
                               const hidl_vec<hidl_string>& chain) override;
     Return<void> listManifestByInterface(const hidl_string& fqInstanceName,
                                          listManifestByInterface_cb _hidl_cb) override;
+    Return<bool> tryUnregister(const hidl_string& fqName,
+                               const hidl_string& name,
+                               const sp<IBase>& service) override;
 
     void handleClientCallbacks();
 
@@ -84,6 +89,8 @@ private:
     void forEachExistingService(std::function<bool(HidlService *)> f);
     void forEachServiceEntry(std::function<bool(const HidlService *)> f) const;
     void forEachServiceEntry(std::function<bool(HidlService *)> f);
+
+    HidlService* lookup(const std::string& fqName, const std::string& name);
 
     using InstanceMap = std::map<
             std::string, // instance name e.x. "manager"

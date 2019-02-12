@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2016 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef ANDROID_HARDWARE_MANAGER_HIDLSERVICE_H
 #define ANDROID_HARDWARE_MANAGER_HIDLSERVICE_H
 
@@ -35,6 +51,7 @@ struct HidlService {
         nullptr,
         static_cast<pid_t>(IServiceManager::PidConstant::NO_PID))
     {}
+    virtual ~HidlService() {}
 
     /**
      * Note, getService() can be nullptr. This is because you can have a HidlService
@@ -50,12 +67,17 @@ struct HidlService {
     bool removeListener(const wp<IBase> &listener);
     void registerPassthroughClient(pid_t pid);
 
+    // also sends onClients(true) if we have clients
     void addClientCallback(const sp<IClientCallback>& callback);
     bool removeClientCallback(const sp<IClientCallback>& callback);
 
-    // return is number of clients (-1 means this is not implemented)
+    // return is number of clients (-1 means this is not implemented or we didn't check)
     // count includes one held by hwservicemanager
     ssize_t handleClientCallbacks(bool isCalledOnInterval);
+
+    // Updates client callbacks (even if mClientCallbacks is emtpy)
+    // see handleClientCallbacks
+    ssize_t forceHandleClientCallbacks(bool isCalledOnInterval);
 
     // when giving out a handle to a client, but the kernel might not know this yet
     void guaranteeClient();
@@ -63,9 +85,18 @@ struct HidlService {
     std::string string() const; // e.x. "android.hidl.manager@1.0::IServiceManager/manager"
     const std::set<pid_t> &getPassthroughClients() const;
 
+protected:
+    // mockable number of clients including hwservicemanager. -1 if not implemented or unavailable.
+    virtual ssize_t getNodeStrongRefCount();
+
 private:
     void sendRegistrationNotifications();
+
+    // Also updates mHasClients (of what the last callback was)
     void sendClientCallbackNotifications(bool hasClients);
+
+    // Only sends notification
+    void sendClientCallbackNotification(const sp<IClientCallback>& callback, bool hasClients);
 
     const std::string                     mInterfaceName; // e.x. "android.hidl.manager@1.0::IServiceManager"
     const std::string                     mInstanceName;  // e.x. "manager"

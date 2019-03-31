@@ -88,7 +88,7 @@ struct ServiceManager : public V1_2::IServiceManager, hidl_death_recipient {
 
     virtual void serviceDied(uint64_t cookie, const wp<IBase>& who);
 private:
-    bool addImpl(const hidl_string& name,
+    bool addImpl(const std::string& name,
                  const sp<IBase>& service,
                  const hidl_vec<hidl_string>& interfaceChain,
                  const AccessControl::CallingContext& callingContext);

@@ -314,7 +314,7 @@ Return<bool> ServiceManager::add(const hidl_string& name, const sp<IBase>& servi
     return addSuccess;
 }
 
-bool ServiceManager::addImpl(const hidl_string& name,
+bool ServiceManager::addImpl(const std::string& name,
                              const sp<IBase>& service,
                              const hidl_vec<hidl_string>& interfaceChain,
                              const AccessControl::CallingContext& callingContext) {
@@ -332,16 +332,36 @@ bool ServiceManager::addImpl(const hidl_string& name,
         }
     }
 
+    // Detect duplicate registration
+    if (interfaceChain.size() > 1) {
+        // second to last entry should be the highest base class other than IBase.
+        const std::string baseFqName = interfaceChain[interfaceChain.size() - 2];
+        const HidlService *hidlService = lookup(baseFqName, name);
+        if (hidlService != nullptr && hidlService->getService() != nullptr) {
+            // This shouldn't occur during normal operation. Here are some cases where
+            // it might get hit:
+            // - bad configuration (service installed on device multiple times)
+            // - race between death notification and a new service being registered
+            //     (previous logs should indicate a separate problem)
+            const std::string childFqName = interfaceChain[0];
+            pid_t newServicePid = IPCThreadState::self()->getCallingPid();
+            pid_t oldServicePid = hidlService->getDebugPid();
+            LOG(WARNING) << "Detected instance of " << childFqName << " (pid: " << newServicePid
+                    << ") registering over instance of or with base of " << baseFqName << " (pid: "
+                    << oldServicePid << ").";
+        }
+    }
+
+    // Unregister superclass if subclass is registered over it
     {
         // For IBar extends IFoo if IFoo/default is being registered, remove
         // IBar/default. This makes sure the following two things are equivalent
         // 1). IBar::castFrom(IFoo::getService(X))
         // 2). IBar::getService(X)
         // assuming that IBar is declared in the device manifest and there
-        // is also not an IBaz extends IFoo.
+        // is also not an IBaz extends IFoo and there is no race.
         const std::string childFqName = interfaceChain[0];
-        const PackageInterfaceMap &ifaceMap = mServiceMap[childFqName];
-        const HidlService *hidlService = ifaceMap.lookup(name);
+        const HidlService *hidlService = lookup(childFqName, name);
         if (hidlService != nullptr) {
             const sp<IBase> remove = hidlService->getService();
 

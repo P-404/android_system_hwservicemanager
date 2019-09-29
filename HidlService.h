@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef ANDROID_HARDWARE_MANAGER_HIDLSERVICE_H
-#define ANDROID_HARDWARE_MANAGER_HIDLSERVICE_H
+#pragma once
 
 #include <set>
 
@@ -116,5 +115,3 @@ private:
 }  // namespace manager
 }  // namespace hidl
 }  // namespace android
-
-#endif // ANDROID_HARDWARE_MANAGER_HIDLSERVICE_H

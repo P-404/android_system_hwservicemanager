@@ -246,6 +246,14 @@ bool ServiceManager::PackageInterfaceMap::removeServiceListener(const wp<IBase>&
 static void tryStartService(const std::string& fqName, const std::string& name) {
     using ::android::base::SetProperty;
 
+    // The "happy path" here is starting up a service that is configured as a
+    // lazy HAL, but we aren't sure that is the case. If the service doesn't
+    // have an 'interface' entry in its .rc file OR if the service is already
+    // running, then this will be a no-op. So, for instance, if a service is
+    // deadlocked during startup, you will see this message repeatedly.
+    LOG(INFO) << "Since " << fqName << "/" << name
+              << " is not registered, trying to start it as a lazy HAL.";
+
     std::thread([=] {
         bool success = SetProperty("ctl.interface_start", fqName + "/" + name);
 

@@ -255,11 +255,7 @@ static void tryStartService(const std::string& fqName, const std::string& name) 
               << " is not registered, trying to start it as a lazy HAL.";
 
     std::thread([=] {
-        bool success = SetProperty("ctl.interface_start", fqName + "/" + name);
-
-        if (!success) {
-            LOG(ERROR) << "Failed to set property for starting " << fqName << "/" << name;
-        }
+        (void)SetProperty("ctl.interface_start", fqName + "/" + name);
     }).detach();
 }
 

@@ -21,7 +21,6 @@ cc_defaults {
     ],
     shared_libs: [
         "libhidlbase",
-        "libhidltransport",
         "liblog",
     ],
 }
@@ -31,7 +30,6 @@ cc_defaults {
     shared_libs: [
         "libbase",
         "libhidl-gen-utils",
-        "libhwbinder",
         "libselinux",
         "libutils",
         "libvintf",

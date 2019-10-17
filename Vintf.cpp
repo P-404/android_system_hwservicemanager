@@ -32,7 +32,8 @@ vintf::Transport getTransportFromManifest(
     if (vm == nullptr) {
         return vintf::Transport::EMPTY;
     }
-    return vm->getTransport(fqName.package(), fqName.getVersion(), fqName.name(), instanceName);
+    return vm->getHidlTransport(fqName.package(), fqName.getVersion(),
+                                fqName.name(), instanceName);
 }
 
 vintf::Transport getTransport(const std::string &interfaceName, const std::string &instanceName) {
@@ -84,10 +85,10 @@ std::set<std::string> getInstances(const std::string& interfaceName) {
     auto deviceManifest = vintf::VintfObject::GetDeviceHalManifest();
     auto frameworkManifest = vintf::VintfObject::GetFrameworkHalManifest();
 
-    std::set<std::string> deviceSet =
-        deviceManifest->getInstances(fqName.package(), fqName.getVersion(), fqName.name());
-    std::set<std::string> frameworkSet =
-        frameworkManifest->getInstances(fqName.package(), fqName.getVersion(), fqName.name());
+    std::set<std::string> deviceSet = deviceManifest->getHidlInstances(
+        fqName.package(), fqName.getVersion(), fqName.name());
+    std::set<std::string> frameworkSet = frameworkManifest->getHidlInstances(
+        fqName.package(), fqName.getVersion(), fqName.name());
 
     ret.insert(deviceSet.begin(), deviceSet.end());
     ret.insert(frameworkSet.begin(), frameworkSet.end());

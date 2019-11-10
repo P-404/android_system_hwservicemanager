@@ -730,9 +730,9 @@ Return<void> ServiceManager::debugDump(debugDump_cb _cb) {
         }
 
         list.push_back({
-            .pid = service->getDebugPid(),
             .interfaceName = service->getInterfaceName(),
             .instanceName = service->getInstanceName(),
+            .pid = service->getDebugPid(),
             .clientPids = clientPids,
             .arch = ::android::hidl::base::V1_0::DebugInfo::Architecture::UNKNOWN
         });

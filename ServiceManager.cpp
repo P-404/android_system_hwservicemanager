@@ -291,7 +291,7 @@ Return<sp<IBase>> ServiceManager::get(const hidl_string& hidlFqName,
     // time. This will run before anything else can modify the HidlService which is owned by this
     // object, so it will be in the same state that it was when this function returns.
     hardware::addPostCommandTask([hidlService] {
-        hidlService->handleClientCallbacks(false /* isCalledOnInterval */);
+        hidlService->handleClientCallbacks(false /* isCalledOnInterval */, 1 /*knownClientCount*/);
     });
 
     return service;
@@ -602,7 +602,10 @@ Return<bool> ServiceManager::registerClientCallback(const hidl_string& hidlFqNam
         return false;
     }
 
-    registered->addClientCallback(cb);
+    // knownClientCount
+    // - one from binder transaction (base here)
+    // - one from hwservicemanager
+    registered->addClientCallback(cb, 2 /*knownClientCount*/);
 
     return true;
 }
@@ -625,7 +628,8 @@ Return<bool> ServiceManager::unregisterClientCallback(const sp<IBase>& server,
 
 void ServiceManager::handleClientCallbacks() {
     forEachServiceEntry([&] (HidlService *service) {
-        service->handleClientCallbacks(true /* isCalledOnInterval */);
+        // hwservicemanager will hold one reference, so knownClientCount is 1.
+        service->handleClientCallbacks(true /* isCalledOnInterval */, 1 /*knownClientCount*/);
         return true;  // continue
     });
 }
@@ -688,14 +692,12 @@ Return<bool> ServiceManager::tryUnregister(const hidl_string& hidlFqName,
         return false;
     }
 
-    int clients = registered->forceHandleClientCallbacks(false /* isCalledOnInterval */);
+    // knownClientCount
+    // - one from binder transaction (base here)
+    // - one from hwservicemanager
+    bool clients = registered->forceHandleClientCallbacks(false /*isCalledOnInterval*/, 2 /*knownClientCount*/);
 
-    // clients < 0: feature not implemented or other error. Assume clients.
-    // Otherwise:
-    // - kernel driver will hold onto one refcount (during this transaction)
-    // - hwservicemanager has a refcount (guaranteed by this transaction)
-    // So, if clients > 2, then at least one other service on the system must hold a refcount.
-    if (clients < 0 || clients > 2) {
+    if (clients) {
         // client callbacks are either disabled or there are other clients
         LOG(INFO) << "Tried to unregister for " << fqName << "/" << name
             << " but there are clients: " << clients;

@@ -284,6 +284,12 @@ Return<sp<IBase>> ServiceManager::get(const hidl_string& hidlFqName,
     // Let HidlService know that we handed out a client. If the client drops the service before the
     // next time handleClientCallbacks is called, it will still know that the service had been handed out.
     hidlService->guaranteeClient();
+    forEachExistingService([&] (HidlService *otherService) {
+        if (otherService != hidlService && interfacesEqual(service, otherService->getService())) {
+            otherService->guaranteeClient();
+        }
+        return true;
+    });
 
     // This is executed immediately after the binder driver confirms the transaction. The driver
     // will update the appropriate data structures to reflect the fact that the client now has the
